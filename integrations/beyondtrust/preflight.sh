@@ -8,6 +8,7 @@ REQUIREMENTS_FILE="${SCRIPT_DIR}/requirements.txt"
 ENV_FILE="${SCRIPT_DIR}/.env"
 VENV_PYTHON="${SCRIPT_DIR}/venv/bin/python3"
 LOG_FILE="${SCRIPT_DIR}/preflight_$(date +%Y%m%d_%H%M%S).log"
+BEYONDTRUST_EFFECTIVE_URL=""
 
 RED='\033[0;31m'; GREEN='\033[0;32m'; YELLOW='\033[1;33m'
 BLUE='\033[0;34m'; NC='\033[0m'; BOLD='\033[1m'
@@ -59,6 +60,8 @@ load_env_if_present() {
     # shellcheck disable=SC1090
     source "$ENV_FILE"
   fi
+
+  BEYONDTRUST_EFFECTIVE_URL="${BEYONDTRUST_HOST_URL:-${BEYONDTRUST_BASE_URL:-}}"
 }
 
 check_system_requirements() {
@@ -198,7 +201,13 @@ check_configuration_file() {
 
   check_env_var "VEZA_URL" "${VEZA_URL:-}"
   check_env_var "VEZA_API_KEY" "${VEZA_API_KEY:-}"
-  check_env_var "BEYONDTRUST_BASE_URL" "${BEYONDTRUST_BASE_URL:-}"
+  check_env_var "BEYONDTRUST_HOST_URL" "${BEYONDTRUST_HOST_URL:-}" optional
+  check_env_var "BEYONDTRUST_BASE_URL" "${BEYONDTRUST_BASE_URL:-}" optional
+  if [[ -z "${BEYONDTRUST_EFFECTIVE_URL:-}" ]]; then
+    print_fail "Set BEYONDTRUST_HOST_URL (preferred) or BEYONDTRUST_BASE_URL"
+  else
+    print_success "BeyondTrust URL set"
+  fi
 
   check_env_var "BEYONDTRUST_API_TOKEN" "${BEYONDTRUST_API_TOKEN:-}" optional
   check_env_var "BEYONDTRUST_USERNAME" "${BEYONDTRUST_USERNAME:-}" optional
@@ -257,11 +266,11 @@ check_network_connectivity() {
   print_header "4) Network Connectivity"
   load_env_if_present
 
-  if [[ -z "${BEYONDTRUST_BASE_URL:-}" ]]; then
-    print_fail "BEYONDTRUST_BASE_URL is not set"
+  if [[ -z "${BEYONDTRUST_EFFECTIVE_URL:-}" ]]; then
+    print_fail "BEYONDTRUST_HOST_URL/BEYONDTRUST_BASE_URL is not set"
   else
     local hp host port result
-    hp="$(parse_host_port_from_url "$BEYONDTRUST_BASE_URL")"
+    hp="$(parse_host_port_from_url "$BEYONDTRUST_EFFECTIVE_URL")"
     host="${hp%%|*}"
     port="${hp##*|}"
 
@@ -271,7 +280,7 @@ check_network_connectivity() {
       print_fail "Cannot reach BeyondTrust ${host}:${port}"
     fi
 
-    result="$(https_check "$BEYONDTRUST_BASE_URL")"
+    result="$(https_check "$BEYONDTRUST_EFFECTIVE_URL")"
     print_info "BeyondTrust HTTPS check (code|latency): ${result}"
   fi
 
@@ -305,17 +314,17 @@ check_api_authentication() {
   print_header "5) API Authentication"
   load_env_if_present
 
-  if [[ -z "${BEYONDTRUST_BASE_URL:-}" ]]; then
-    print_fail "Cannot test BeyondTrust auth without BEYONDTRUST_BASE_URL"
+  if [[ -z "${BEYONDTRUST_EFFECTIVE_URL:-}" ]]; then
+    print_fail "Cannot test BeyondTrust auth without BEYONDTRUST_HOST_URL/BEYONDTRUST_BASE_URL"
   else
     local accounts_ep
     accounts_ep="${BEYONDTRUST_MANAGED_ACCOUNTS_ENDPOINT:-/api/public/v3/ManagedAccounts}"
 
-    print_info "[DEBUG] BeyondTrust target: ${BEYONDTRUST_BASE_URL}${accounts_ep}"
+    print_info "[DEBUG] BeyondTrust target: ${BEYONDTRUST_EFFECTIVE_URL}${accounts_ep}"
 
     if [[ -n "${BEYONDTRUST_API_TOKEN:-}" ]]; then
       local code
-      code="$(curl -s -o /tmp/bt_auth_test.out -w "%{http_code}" -H "Authorization: Bearer ${BEYONDTRUST_API_TOKEN}" "${BEYONDTRUST_BASE_URL}${accounts_ep}")"
+      code="$(curl -s -o /tmp/bt_auth_test.out -w "%{http_code}" -H "Authorization: Bearer ${BEYONDTRUST_API_TOKEN}" "${BEYONDTRUST_EFFECTIVE_URL}${accounts_ep}")"
       if [[ "$code" == "200" ]]; then
         print_success "BeyondTrust bearer token authentication succeeded"
       else
@@ -324,11 +333,11 @@ check_api_authentication() {
     elif [[ -n "${BEYONDTRUST_USERNAME:-}" && -n "${BEYONDTRUST_PASSWORD:-}" ]]; then
       local auth_ep auth_code
       auth_ep="${BEYONDTRUST_AUTH_ENDPOINT:-/api/public/v3/Auth/SignAppin}"
-      print_info "[DEBUG] BeyondTrust auth endpoint: ${BEYONDTRUST_BASE_URL}${auth_ep}"
+      print_info "[DEBUG] BeyondTrust auth endpoint: ${BEYONDTRUST_EFFECTIVE_URL}${auth_ep}"
       auth_code="$(curl -s -o /tmp/bt_login_test.out -w "%{http_code}" -X POST \
         -H "Content-Type: application/json" \
         -d "{\"username\":\"${BEYONDTRUST_USERNAME}\",\"password\":\"${BEYONDTRUST_PASSWORD}\"}" \
-        "${BEYONDTRUST_BASE_URL}${auth_ep}")"
+        "${BEYONDTRUST_EFFECTIVE_URL}${auth_ep}")"
       if [[ "$auth_code" == "200" || "$auth_code" == "201" ]]; then
         print_success "BeyondTrust username/password auth endpoint call succeeded"
       else
@@ -400,7 +409,7 @@ if p.exists():
 PYEOF
   fi
 
-  if [[ -n "${BEYONDTRUST_BASE_URL:-}" ]]; then
+  if [[ -n "${BEYONDTRUST_EFFECTIVE_URL:-}" ]]; then
     local endpoints=(
       "${BEYONDTRUST_MANAGED_ACCOUNTS_ENDPOINT:-/api/public/v3/ManagedAccounts}"
       "${BEYONDTRUST_DEVICES_ENDPOINT:-/api/public/v3/ManagedSystems}"
@@ -411,9 +420,9 @@ PYEOF
     for ep in "${endpoints[@]}"; do
       local code
       if [[ -n "${BEYONDTRUST_API_TOKEN:-}" ]]; then
-        code="$(curl -s -o /dev/null -w "%{http_code}" -H "Authorization: Bearer ${BEYONDTRUST_API_TOKEN}" "${BEYONDTRUST_BASE_URL}${ep}")"
+        code="$(curl -s -o /dev/null -w "%{http_code}" -H "Authorization: Bearer ${BEYONDTRUST_API_TOKEN}" "${BEYONDTRUST_EFFECTIVE_URL}${ep}")"
       else
-        code="$(curl -s -o /dev/null -w "%{http_code}" "${BEYONDTRUST_BASE_URL}${ep}")"
+        code="$(curl -s -o /dev/null -w "%{http_code}" "${BEYONDTRUST_EFFECTIVE_URL}${ep}")"
       fi
 
       if [[ "$code" =~ ^2[0-9][0-9]$ ]]; then
@@ -472,6 +481,7 @@ display_current_configuration() {
   echo "ENV_FILE=${ENV_FILE}" | tee_log
   echo "VEZA_URL=${VEZA_URL:-}" | tee_log
   echo "VEZA_API_KEY=$(mask_value "${VEZA_API_KEY:-}")" | tee_log
+  echo "BEYONDTRUST_HOST_URL=${BEYONDTRUST_HOST_URL:-}" | tee_log
   echo "BEYONDTRUST_BASE_URL=${BEYONDTRUST_BASE_URL:-}" | tee_log
   echo "BEYONDTRUST_API_TOKEN=$(mask_value "${BEYONDTRUST_API_TOKEN:-}")" | tee_log
   echo "BEYONDTRUST_USERNAME=${BEYONDTRUST_USERNAME:-}" | tee_log

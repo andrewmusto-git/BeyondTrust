@@ -33,8 +33,8 @@ Options:
   -h, --help                Show help
 
 Non-interactive required env vars:
-  VEZA_URL VEZA_API_KEY BEYONDTRUST_BASE_URL
-  and one of: BEYONDTRUST_API_TOKEN or (BEYONDTRUST_USERNAME + BEYONDTRUST_PASSWORD)
+  VEZA_URL VEZA_API_KEY BEYONDTRUST_HOST_URL
+  BEYONDTRUST_OAUTH_TOKEN_URL BEYONDTRUST_OAUTH_CLIENT_ID BEYONDTRUST_OAUTH_CLIENT_SECRET
 EOF
 }
 
@@ -207,36 +207,47 @@ create_env_file() {
     return
   fi
 
-  local veza_url veza_api_key bt_base bt_token bt_user bt_pass
+  local veza_url veza_api_key bt_host bt_oauth_token_url bt_oauth_client_id bt_oauth_client_secret bt_oauth_scope
   veza_url="$(prompt_value "Veza URL" "${VEZA_URL:-}")"
   veza_api_key="$(prompt_value "Veza API key" "${VEZA_API_KEY:-}" true)"
-  bt_base="$(prompt_value "BeyondTrust Base URL" "${BEYONDTRUST_BASE_URL:-}")"
-  bt_token="$(prompt_value "BeyondTrust API token (optional if using user/password)" "${BEYONDTRUST_API_TOKEN:-}" true)"
-  bt_user="$(prompt_value "BeyondTrust username (optional if using API token)" "${BEYONDTRUST_USERNAME:-}")"
-  bt_pass="$(prompt_value "BeyondTrust password (optional if using API token)" "${BEYONDTRUST_PASSWORD:-}" true)"
+  bt_host="$(prompt_value "BeyondTrust Host URL" "${BEYONDTRUST_HOST_URL:-${BEYONDTRUST_BASE_URL:-}}")"
+  bt_oauth_token_url="$(prompt_value "BeyondTrust OAuth 2.0 Token URL" "${BEYONDTRUST_OAUTH_TOKEN_URL:-}")"
+  bt_oauth_client_id="$(prompt_value "BeyondTrust OAuth Client ID" "${BEYONDTRUST_OAUTH_CLIENT_ID:-}")"
+  bt_oauth_client_secret="$(prompt_value "BeyondTrust OAuth Client Secret" "${BEYONDTRUST_OAUTH_CLIENT_SECRET:-}" true)"
+  bt_oauth_scope="$(prompt_value "BeyondTrust OAuth Scope (optional)" "${BEYONDTRUST_OAUTH_SCOPE:-}")"
 
-  if [[ -z "${veza_url}" || -z "${veza_api_key}" || -z "${bt_base}" ]]; then
-    die "VEZA_URL, VEZA_API_KEY, and BEYONDTRUST_BASE_URL are required"
+  if [[ -z "${veza_url}" || -z "${veza_api_key}" || -z "${bt_host}" ]]; then
+    die "VEZA_URL, VEZA_API_KEY, and BEYONDTRUST_HOST_URL are required"
   fi
 
-  if [[ -z "${bt_token}" && ( -z "${bt_user}" || -z "${bt_pass}" ) ]]; then
-    die "Provide BEYONDTRUST_API_TOKEN or BEYONDTRUST_USERNAME and BEYONDTRUST_PASSWORD"
+  if [[ -z "${bt_oauth_token_url}" || -z "${bt_oauth_client_id}" || -z "${bt_oauth_client_secret}" ]]; then
+    die "BEYONDTRUST_OAUTH_TOKEN_URL, BEYONDTRUST_OAUTH_CLIENT_ID, and BEYONDTRUST_OAUTH_CLIENT_SECRET are required"
   fi
 
   cat > "${env_file}" <<EOF
 # BeyondTrust source configuration
-BEYONDTRUST_BASE_URL=${bt_base}
-BEYONDTRUST_API_TOKEN=${bt_token}
-BEYONDTRUST_USERNAME=${bt_user}
-BEYONDTRUST_PASSWORD=${bt_pass}
+BEYONDTRUST_HOST_URL=${bt_host}
+# Backward-compatible alias used by older connector builds
+BEYONDTRUST_BASE_URL=${bt_host}
+BEYONDTRUST_AUTH_TYPE=oauth2_client_credentials
+BEYONDTRUST_OAUTH_GRANT_TYPE=client_credentials
+BEYONDTRUST_OAUTH_TOKEN_URL=${bt_oauth_token_url}
+BEYONDTRUST_OAUTH_CLIENT_ID=${bt_oauth_client_id}
+BEYONDTRUST_OAUTH_CLIENT_SECRET=${bt_oauth_client_secret}
+BEYONDTRUST_OAUTH_SCOPE=${bt_oauth_scope}
 BEYONDTRUST_API_KEY=${BEYONDTRUST_API_KEY:-}
 
 # Optional endpoint overrides
-BEYONDTRUST_AUTH_ENDPOINT=/api/public/v3/Auth/SignAppin
 BEYONDTRUST_MANAGED_ACCOUNTS_ENDPOINT=/api/public/v3/ManagedAccounts
 BEYONDTRUST_DEVICES_ENDPOINT=/api/public/v3/ManagedSystems
 BEYONDTRUST_APPLICATIONS_ENDPOINT=/api/public/v3/Applications
 BEYONDTRUST_ACCESS_ASSIGNMENTS_ENDPOINT=/api/public/v3/AccessAssignments
+
+# Legacy auth fallback (optional, not used for OAuth2 client credentials)
+# BEYONDTRUST_API_TOKEN=
+# BEYONDTRUST_USERNAME=
+# BEYONDTRUST_PASSWORD=
+# BEYONDTRUST_AUTH_ENDPOINT=/api/public/v3/Auth/SignAppin
 
 # Veza configuration
 VEZA_URL=${veza_url}

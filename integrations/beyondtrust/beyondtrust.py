@@ -64,9 +64,16 @@ class Config:
     veza_api_key: Optional[str]
     provider_name: str
     datasource_name: str
+    bt_host_url: str
     bt_base_url: str
     bt_api_token: Optional[str]
     bt_api_key: Optional[str]
+    bt_auth_type: str
+    bt_oauth_grant_type: str
+    bt_oauth_token_url: Optional[str]
+    bt_oauth_client_id: Optional[str]
+    bt_oauth_client_secret: Optional[str]
+    bt_oauth_scope: Optional[str]
     bt_username: Optional[str]
     bt_password: Optional[str]
     bt_auth_endpoint: str
@@ -100,9 +107,16 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--veza-url", default=None, help="Veza tenant URL")
     parser.add_argument("--veza-api-key", default=None, help="Veza API key")
 
-    parser.add_argument("--bt-base-url", default=None, help="BeyondTrust API base URL")
+    parser.add_argument("--bt-host-url", default=None, help="BeyondTrust host URL")
+    parser.add_argument("--bt-base-url", default=None, help="BeyondTrust API base URL (legacy alias)")
     parser.add_argument("--bt-api-token", default=None, help="BeyondTrust bearer token")
     parser.add_argument("--bt-api-key", default=None, help="BeyondTrust API key header value")
+    parser.add_argument("--bt-auth-type", default=None, help="Auth type: oauth2_client_credentials|token|username_password")
+    parser.add_argument("--bt-oauth-grant-type", default=None, help="OAuth grant type (default: client_credentials)")
+    parser.add_argument("--bt-oauth-token-url", default=None, help="OAuth token endpoint URL")
+    parser.add_argument("--bt-oauth-client-id", default=None, help="OAuth client ID")
+    parser.add_argument("--bt-oauth-client-secret", default=None, help="OAuth client secret")
+    parser.add_argument("--bt-oauth-scope", default=None, help="OAuth scope (optional)")
     parser.add_argument("--bt-username", default=None, help="BeyondTrust username for login auth")
     parser.add_argument("--bt-password", default=None, help="BeyondTrust password for login auth")
 
@@ -162,14 +176,30 @@ def load_config(args: argparse.Namespace) -> Config:
     if args.env_file and os.path.exists(args.env_file):
         load_dotenv(args.env_file)
 
+    host_url = (
+        args.bt_host_url
+        or os.getenv("BEYONDTRUST_HOST_URL")
+        or args.bt_base_url
+        or os.getenv("BEYONDTRUST_BASE_URL", "")
+    ).rstrip("/")
+
     return Config(
         veza_url=args.veza_url or os.getenv("VEZA_URL"),
         veza_api_key=args.veza_api_key or os.getenv("VEZA_API_KEY"),
         provider_name=args.provider_name or os.getenv("PROVIDER_NAME", "BeyondTrust"),
         datasource_name=args.datasource_name or os.getenv("DATASOURCE_NAME", "BeyondTrust"),
-        bt_base_url=(args.bt_base_url or os.getenv("BEYONDTRUST_BASE_URL", "")).rstrip("/"),
+        bt_host_url=host_url,
+        bt_base_url=host_url,
         bt_api_token=args.bt_api_token or os.getenv("BEYONDTRUST_API_TOKEN"),
         bt_api_key=args.bt_api_key or os.getenv("BEYONDTRUST_API_KEY"),
+        bt_auth_type=(args.bt_auth_type or os.getenv("BEYONDTRUST_AUTH_TYPE", "")).strip().lower() or "token",
+        bt_oauth_grant_type=(
+            args.bt_oauth_grant_type or os.getenv("BEYONDTRUST_OAUTH_GRANT_TYPE", "client_credentials")
+        ).strip(),
+        bt_oauth_token_url=args.bt_oauth_token_url or os.getenv("BEYONDTRUST_OAUTH_TOKEN_URL"),
+        bt_oauth_client_id=args.bt_oauth_client_id or os.getenv("BEYONDTRUST_OAUTH_CLIENT_ID"),
+        bt_oauth_client_secret=args.bt_oauth_client_secret or os.getenv("BEYONDTRUST_OAUTH_CLIENT_SECRET"),
+        bt_oauth_scope=args.bt_oauth_scope or os.getenv("BEYONDTRUST_OAUTH_SCOPE"),
         bt_username=args.bt_username or os.getenv("BEYONDTRUST_USERNAME"),
         bt_password=args.bt_password or os.getenv("BEYONDTRUST_PASSWORD"),
         bt_auth_endpoint=args.bt_auth_endpoint or os.getenv("BEYONDTRUST_AUTH_ENDPOINT", "/api/public/v3/Auth/SignAppin"),
@@ -417,6 +447,44 @@ class BeyondTrustClient:
             self.session.headers["X-API-Key"] = self.config.bt_api_key
 
         if "Authorization" in self.session.headers:
+            return
+
+        if self.config.bt_auth_type == "oauth2_client_credentials":
+            if not (
+                self.config.bt_oauth_token_url
+                and self.config.bt_oauth_client_id
+                and self.config.bt_oauth_client_secret
+            ):
+                raise RuntimeError(
+                    "OAuth2 client credentials selected, but token URL/client ID/client secret are missing"
+                )
+
+            payload = {
+                "grant_type": self.config.bt_oauth_grant_type or "client_credentials",
+                "client_id": self.config.bt_oauth_client_id,
+                "client_secret": self.config.bt_oauth_client_secret,
+            }
+            if self.config.bt_oauth_scope:
+                payload["scope"] = self.config.bt_oauth_scope
+
+            log.info("Requesting OAuth2 access token from token endpoint")
+            response = self.session.post(
+                self.config.bt_oauth_token_url,
+                data=payload,
+                timeout=self.config.timeout_seconds,
+                verify=self.config.verify_tls,
+            )
+            if not response.ok:
+                raise RuntimeError(
+                    f"OAuth token request failed ({response.status_code}): {response.text[:400]}"
+                )
+
+            token_payload = response.json() if response.text else {}
+            token = _first_present(token_payload, ["access_token", "token", "bearerToken", "sessionToken"])
+            if not token:
+                raise RuntimeError("OAuth token response did not include access_token")
+
+            self.session.headers["Authorization"] = f"Bearer {token}"
             return
 
         if self.config.bt_username and self.config.bt_password:
@@ -799,10 +867,19 @@ def push_to_veza(config: Config, app: CustomApplication, dry_run: bool, save_jso
 def validate_required(config: Config, dry_run: bool, use_csv_samples: bool) -> None:
     missing: List[str] = []
     if not use_csv_samples:
-        if not config.bt_base_url:
-            missing.append("BEYONDTRUST_BASE_URL")
-        if not (config.bt_api_token or (config.bt_username and config.bt_password)):
-            missing.append("BEYONDTRUST_API_TOKEN or BEYONDTRUST_USERNAME/BEYONDTRUST_PASSWORD")
+        if not config.bt_host_url:
+            missing.append("BEYONDTRUST_HOST_URL")
+        oauth_ready = bool(
+            config.bt_auth_type == "oauth2_client_credentials"
+            and config.bt_oauth_token_url
+            and config.bt_oauth_client_id
+            and config.bt_oauth_client_secret
+        )
+        legacy_ready = bool(config.bt_api_token or (config.bt_username and config.bt_password))
+        if not (oauth_ready or legacy_ready):
+            missing.append(
+                "OAuth2 client credentials (token URL/client ID/client secret) or BEYONDTRUST_API_TOKEN or BEYONDTRUST_USERNAME/BEYONDTRUST_PASSWORD"
+            )
     if not dry_run:
         if not config.veza_url:
             missing.append("VEZA_URL")

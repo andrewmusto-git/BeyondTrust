@@ -68,7 +68,7 @@ graph LR
 
 ## 3. How It Works
 1. Parse CLI flags and `.env` configuration.
-2. Authenticate to BeyondTrust using API token or username/password.
+2. Authenticate to BeyondTrust using OAuth 2.0 Client Credentials (or legacy token/username-password fallback).
 3. Pull managed accounts, devices, applications, and access assignments from API endpoints.
   - If all three CSV samples are present, the script reads those files instead of calling APIs.
 4. Normalize source records and permission names.
@@ -80,11 +80,13 @@ graph LR
 - Linux host (RHEL/CentOS/Fedora or Ubuntu/Debian)
 - Python 3.9+
 - Network access from runner to:
-  - BeyondTrust API base URL
+  - BeyondTrust host URL
   - Veza tenant (`https://<tenant>.veza.com`)
 - BeyondTrust API credentials:
-  - `BEYONDTRUST_API_TOKEN`, or
-  - `BEYONDTRUST_USERNAME` + `BEYONDTRUST_PASSWORD`
+  - `BEYONDTRUST_HOST_URL`
+  - `BEYONDTRUST_OAUTH_TOKEN_URL`
+  - `BEYONDTRUST_OAUTH_CLIENT_ID`
+  - `BEYONDTRUST_OAUTH_CLIENT_SECRET`
 - Veza API key with OAA push rights
 
 ## 5. Quick Start
@@ -96,8 +98,10 @@ Non-interactive install:
 ```bash
 VEZA_URL=your-company.veza.com \
 VEZA_API_KEY=*** \
-BEYONDTRUST_BASE_URL=https://bt.example.com \
-BEYONDTRUST_API_TOKEN=*** \
+BEYONDTRUST_HOST_URL=https://bt.example.com \
+BEYONDTRUST_OAUTH_TOKEN_URL=https://auth.example.com/oauth2/token \
+BEYONDTRUST_OAUTH_CLIENT_ID=*** \
+BEYONDTRUST_OAUTH_CLIENT_SECRET=*** \
 bash install_beyondtrust.sh --non-interactive
 ```
 
@@ -135,8 +139,13 @@ chmod 600 .env
 | `--datasource-name` | No | string | `BeyondTrust` | Veza datasource name override |
 | `--veza-url` | Conditional | URL/host | env | Veza URL (required unless dry-run) |
 | `--veza-api-key` | Conditional | string | env | Veza API key (required unless dry-run) |
-| `--bt-base-url` | Yes | URL | env | BeyondTrust API base URL |
-| `--bt-api-token` | Conditional | string | env | BeyondTrust bearer token |
+| `--bt-host-url` | Yes | URL | env | BeyondTrust host URL |
+| `--bt-base-url` | No | URL | env | BeyondTrust API base URL (legacy alias) |
+| `--bt-oauth-token-url` | Conditional | URL | env | OAuth 2.0 token endpoint |
+| `--bt-oauth-client-id` | Conditional | string | env | OAuth 2.0 client ID |
+| `--bt-oauth-client-secret` | Conditional | string | env | OAuth 2.0 client secret |
+| `--bt-oauth-scope` | No | string | env | OAuth 2.0 scope |
+| `--bt-api-token` | Conditional | string | env | Legacy bearer token |
 | `--bt-username` | Conditional | string | env | BeyondTrust username if no token |
 | `--bt-password` | Conditional | string | env | BeyondTrust password if no token |
 | `--bt-api-key` | No | string | env | Optional `X-API-Key` header |
